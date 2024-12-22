@@ -42,8 +42,8 @@ Ensure you have the following installed:
 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/nucleargeeketh/openai-realtime-python-example.git
-   cd openai-realtime-python-example
+   git clone https://github.com/ericmichael/openai-realtime-chat.git
+   cd openai-realtime-chat
    ```
 
 2. **Create and activate a virtual environment**:
