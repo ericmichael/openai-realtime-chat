@@ -12,6 +12,7 @@ from functools import partial
 from gradio.components import Audio
 import librosa
 import numpy as np
+from tools import ToolManager, schema
 
 load_dotenv()
 
@@ -46,6 +47,8 @@ class WebSocketManager:
         self.voice = "alloy"
         self.temperature = 0.6
         self.event_logs = []
+        self.tool_manager = ToolManager()
+        self.selected_tools = []
 
     def _log_event(self, direction: str, event: str):
         """Helper to log WebSocket events, omitting base64 audio data"""
@@ -121,8 +124,8 @@ class WebSocketManager:
                 "output_audio_format": "pcm16",
                 "input_audio_transcription": {"model": "whisper-1"},
                 "turn_detection": None,
-                "tools": [],
-                "tool_choice": "none",
+                "tools": self.tool_manager.tools,
+                "tool_choice": self.tool_manager.tool_choice,
                 "temperature": self.temperature,
             },
         }
@@ -155,44 +158,64 @@ class WebSocketManager:
 
         audio_data_list = []
 
-        # Use last_assistant_message_id instead of last_message_id
         if self.last_assistant_message_id:
             event_dict = json.loads(audio_event)
             event_dict["previous_item_id"] = self.last_assistant_message_id
             audio_event = json.dumps(event_dict)
 
-        # Log outgoing event
         self._log_event("SENDING", audio_event)
         await self.websocket.send(audio_event)
 
-        # Wait for the message to be created
+        # Wait for the message to be created and send response.create
         async for message in self.websocket:
             self._log_event("RECEIVED", message)
             event = json.loads(message)
-
             if event.get("type") == "conversation.item.created":
-                # After the message is created, send a response.create event
                 create_response = {"type": "response.create"}
                 self._log_event("SENDING", create_response)
                 await self.websocket.send(json.dumps(create_response))
                 break
 
-        # Now continue listening for the response
+        # Now listen for the response
         async for message in self.websocket:
             self._log_event("RECEIVED", message)
             event = json.loads(message)
 
-            # Update tracking of message IDs
-            if event.get("type") == "conversation.item.created":
-                item = event.get("item", {})
-                if item.get("role") == "assistant":
-                    self.last_assistant_message_id = item.get("id")
-                self.last_message_id = item.get("id")
-
+            # Handle audio responses
             if event.get("type") == "response.audio.delta":
                 audio_data_list.append(event["delta"])
 
-            if event.get("type") == "response.audio.done":
+            # Process function calls when response is complete
+            elif event.get("type") == "response.done":
+                # Process function calls in the output
+                for output_item in event["response"]["output"]:
+                    if output_item["type"] == "function_call":
+                        tool_name = output_item["name"]
+                        tool_args = json.loads(output_item["arguments"])
+
+                        # Execute the tool
+                        result = await self.tool_manager.execute_tool(
+                            tool_name, tool_args
+                        )
+
+                        # Send the result back
+                        tool_response = {
+                            "type": "conversation.item.create",
+                            "item": {
+                                "type": "function_call_output",
+                                "call_id": output_item["call_id"],
+                                "output": json.dumps(result),
+                            },
+                        }
+                        self._log_event("SENDING", tool_response)
+                        await self.websocket.send(json.dumps(tool_response))
+
+                        # Add this: Request another response after sending tool results
+                        create_response = {"type": "response.create"}
+                        self._log_event("SENDING", create_response)
+                        await self.websocket.send(json.dumps(create_response))
+
+            elif event.get("type") == "response.audio.done":
                 full_audio_base64 = "".join(audio_data_list)
                 return base64.b64decode(full_audio_base64)
 
@@ -209,13 +232,27 @@ def create_toggle_button():
     return gr.Button("Start Session", variant="primary")
 
 
-async def toggle_session(button_text, instructions, voice):
+async def toggle_session(button_text, instructions, voice, selected_tools):
     if button_text == "Start Session":
         ws_manager.instructions = instructions
         ws_manager.voice = voice
+        # Register selected tools and set tool_choice
+        if selected_tools:
+            available_tools = ws_manager.tool_manager.get_available_tools()
+            selected_functions = [
+                f for f in available_tools if f.__name__ in selected_tools
+            ]
+            ws_manager.tool_manager.register_tools(selected_functions)
+            ws_manager.tool_manager.tool_choice = (
+                "auto"  # Set to "auto" when tools are selected
+            )
+        else:
+            ws_manager.tool_manager.tools = []  # Clear tools if none selected
+            ws_manager.tool_manager.tool_choice = "none"  # Set to "none" when no tools
         await ws_manager.connect()
         return (
             gr.update(value="End Session", variant="secondary"),
+            gr.update(interactive=False),
             gr.update(interactive=False),
             gr.update(interactive=False),
             "🟢 Connected",
@@ -399,6 +436,14 @@ with gr.Blocks(
                 label="Voice",
                 info="Select the AI voice to use",
             )
+            # Replace the dropdown with checkboxes
+            tools_checkboxes = gr.CheckboxGroup(
+                choices=[
+                    f.__name__ for f in ws_manager.tool_manager.get_available_tools()
+                ],
+                label="Available Tools",
+                info="Select tools to enable for the AI",
+            )
             session_btn = create_toggle_button()
 
         # Add this function to handle template selection
@@ -424,11 +469,12 @@ with gr.Blocks(
         # Update the toggle_session function to remove status_text
         session_btn.click(
             fn=toggle_session,
-            inputs=[session_btn, instructions, voice_dropdown],
+            inputs=[session_btn, instructions, voice_dropdown, tools_checkboxes],
             outputs=[
                 session_btn,
                 instructions,
                 voice_dropdown,
+                tools_checkboxes,
                 status_indicator,
                 settings_accordion,
                 audio_input,
