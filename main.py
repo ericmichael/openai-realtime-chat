@@ -107,8 +107,7 @@ class WebSocketManager:
         }
 
         self.websocket = await websockets.connect(url, additional_headers=headers)
-        self.is_connected = True
-        print("Connected to server.")
+        print("WebSocket connected, waiting for session update confirmation...")
 
         session_update = {
             "type": "session.update",
@@ -129,6 +128,15 @@ class WebSocketManager:
         # Log and send the session update
         self._log_event("SENDING", session_update)
         await self.websocket.send(json.dumps(session_update))
+
+        # Wait for session.updated confirmation
+        async for message in self.websocket:
+            self._log_event("RECEIVED", message)
+            event = json.loads(message)
+            if event.get("type") == "session.updated":
+                self.is_connected = True
+                print("Session updated, connection is now active.")
+                break
 
     async def disconnect(self):
         if self.websocket and self.is_connected:
