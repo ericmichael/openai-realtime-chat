@@ -10,6 +10,8 @@ import gradio as gr
 from dotenv import load_dotenv
 from functools import partial
 from gradio.components import Audio
+import librosa
+import numpy as np
 
 load_dotenv()
 
@@ -243,8 +245,18 @@ def numpy_to_audio_bytes(audio_np, sample_rate):
 
 def audio_to_item_create_event(audio_data: tuple) -> str:
     sample_rate, audio_np = audio_data
-    audio_bytes = numpy_to_audio_bytes(audio_np, sample_rate)
 
+    # Load and resample in one step using librosa
+    audio_np = librosa.load(
+        io.BytesIO(numpy_to_audio_bytes(audio_np, sample_rate)),
+        sr=24000,  # Target sample rate
+        mono=True,
+    )[0]
+
+    # Convert back to 16-bit PCM
+    audio_np = (audio_np * 32768.0).astype(np.int16)
+
+    audio_bytes = numpy_to_audio_bytes(audio_np, 24000)
     pcm_base64 = base64.b64encode(audio_bytes).decode("utf-8")
 
     event = {
