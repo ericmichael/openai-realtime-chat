@@ -7,3 +7,6 @@ librosa
 geocoder
 pydantic
 resampy
+jupyter-client
+ipython
+ipykernel

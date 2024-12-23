@@ -13,6 +13,9 @@ from gradio.components import Audio
 import librosa
 import numpy as np
 from tools import ToolManager, schema
+from datetime import datetime
+import geocoder
+from magic_variables import magic_manager
 
 load_dotenv()
 
@@ -20,13 +23,12 @@ load_dotenv()
 AVAILABLE_VOICES = [
     "alloy",
     "ash",
+    "ballad",
     "coral",
     "echo",
-    "fable",
-    "onyx",
-    "nova",
     "sage",
     "shimmer",
+    "verse",
 ]
 
 # Add near the top with other constants
@@ -36,6 +38,13 @@ DEFAULT_INSTRUCTIONS = {
     "Technical Expert": "You are a technical expert. Provide detailed technical explanations and help debug problems.",
 }
 
+# Add this after the DEFAULT_INSTRUCTIONS constant
+MAGIC_VARIABLES = {
+    "todays_date": lambda: datetime.now().strftime("%B %d, %Y"),
+    "current_time": lambda: datetime.now().strftime("%I:%M %p"),
+    "user_location": lambda: f"{geocoder.ip('me').city}, {geocoder.ip('me').state}",
+}
+
 
 class WebSocketManager:
     def __init__(self):
@@ -43,12 +52,15 @@ class WebSocketManager:
         self.is_connected = False
         self.last_message_id = None
         self.last_assistant_message_id = None
-        self.instructions = "You are a helpful assistant."
+        self._raw_instructions = "You are a helpful assistant."
+        self.instructions = self._process_instructions(self._raw_instructions)
         self.voice = "alloy"
         self.temperature = 0.6
         self.event_logs = []
         self.tool_manager = ToolManager()
         self.selected_tools = []
+        self.jupyter_kernel = None
+        self.session_id = None
 
     def _log_event(self, direction: str, event: str):
         """Helper to log WebSocket events, omitting base64 audio data"""
@@ -99,9 +111,40 @@ class WebSocketManager:
             print(event)
             print(f"{'=' * 40}\n")
 
+    def _process_instructions(self, instructions: str) -> str:
+        """Process instructions using the magic variable manager"""
+        return magic_manager.process_instructions(instructions)
+
+    @property
+    def instructions(self):
+        return self._raw_instructions
+
+    @instructions.setter
+    def instructions(self, value):
+        self._raw_instructions = value
+        self._processed_instructions = self._process_instructions(value)
+
     async def connect(self):
         if self.is_connected:
+            print("Already connected, skipping...")  # Debug print
             return
+
+        print("Connecting to WebSocket...")  # Debug print
+        # Generate a unique session ID
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        print(f"Generated Session ID: {self.session_id}")  # Debug print
+
+        # Initialize Jupyter kernel if Python tool is selected
+        if any(tool.get("name") == "python" for tool in self.tool_manager.tools):
+            print(
+                f"Python tool detected, initializing Jupyter kernel in ./notebooks/{self.session_id}"
+            )  # Debug print
+            from jupyter_backend import JupyterKernel
+
+            work_dir = f"./notebooks/{self.session_id}"
+            self.jupyter_kernel = JupyterKernel(work_dir)
+            # Update the Python tool to use the kernel
+            self.tool_manager.jupyter_kernel = self.jupyter_kernel
 
         url = (
             "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
@@ -118,7 +161,7 @@ class WebSocketManager:
             "type": "session.update",
             "session": {
                 "modalities": ["audio", "text"],
-                "instructions": self.instructions,
+                "instructions": self._processed_instructions,
                 "voice": self.voice,
                 "input_audio_format": "pcm16",
                 "output_audio_format": "pcm16",
@@ -145,6 +188,11 @@ class WebSocketManager:
 
     async def disconnect(self):
         if self.websocket and self.is_connected:
+            # Cleanup Jupyter kernel if it exists
+            if self.jupyter_kernel:
+                self.jupyter_kernel.kernel_client.shutdown()
+                self.jupyter_kernel = None
+
             await self.websocket.close()
             self.is_connected = False
             self.websocket = None
@@ -191,7 +239,23 @@ class WebSocketManager:
                 for output_item in event["response"]["output"]:
                     if output_item["type"] == "function_call":
                         tool_name = output_item["name"]
-                        tool_args = json.loads(output_item["arguments"])
+                        raw_args = output_item["arguments"]
+
+                        # Try to parse as JSON first
+                        try:
+                            tool_args = json.loads(raw_args)
+                            # If it's Python tool but args aren't in expected format, wrap them
+                            if tool_name == "python" and not isinstance(
+                                tool_args, dict
+                            ):
+                                tool_args = {"code": raw_args}
+                        except json.JSONDecodeError:
+                            # If JSON parsing fails and it's Python tool, wrap the raw code
+                            if tool_name == "python":
+                                tool_args = {"code": raw_args}
+                            else:
+                                # For non-Python tools, re-raise the error
+                                raise
 
                         # Execute the tool
                         result = await self.tool_manager.execute_tool(
@@ -210,7 +274,6 @@ class WebSocketManager:
                         self._log_event("SENDING", tool_response)
                         await self.websocket.send(json.dumps(tool_response))
 
-                        # Add this: Request another response after sending tool results
                         create_response = {"type": "response.create"}
                         self._log_event("SENDING", create_response)
                         await self.websocket.send(json.dumps(create_response))
@@ -232,42 +295,64 @@ def create_toggle_button():
     return gr.Button("Start Session", variant="primary")
 
 
-async def toggle_session(button_text, instructions, voice, selected_tools):
+async def toggle_session(button_text, instructions_value, voice_value, tools_value):
     if button_text == "Start Session":
-        ws_manager.instructions = instructions
-        ws_manager.voice = voice
-        # Register selected tools and set tool_choice
-        if selected_tools:
+        print("Starting new session...")
+        ws_manager.instructions = instructions_value
+        ws_manager.voice = voice_value
+
+        # Initialize tools first
+        if tools_value:
+            print(f"Selected tools: {tools_value}")
             available_tools = ws_manager.tool_manager.get_available_tools()
             selected_functions = [
-                f for f in available_tools if f.__name__ in selected_tools
+                f for f in available_tools if f.__name__ in tools_value
             ]
+
+            # Initialize Jupyter kernel before registering tools if Python is selected
+            if "python" in tools_value:
+                print(f"Python tool detected, initializing Jupyter kernel...")
+                from jupyter_backend import JupyterKernel
+
+                work_dir = f"./notebooks/{ws_manager.session_id}"
+                ws_manager.tool_manager.jupyter_kernel = JupyterKernel(work_dir)
+
+            # Register tools after kernel is initialized
             ws_manager.tool_manager.register_tools(selected_functions)
-            ws_manager.tool_manager.tool_choice = (
-                "auto"  # Set to "auto" when tools are selected
-            )
+            ws_manager.tool_manager.tool_choice = "auto"
         else:
-            ws_manager.tool_manager.tools = []  # Clear tools if none selected
-            ws_manager.tool_manager.tool_choice = "none"  # Set to "none" when no tools
+            ws_manager.tool_manager.tools = []
+            ws_manager.tool_manager.tool_choice = "none"
+
         await ws_manager.connect()
+        print("Session started successfully")
+
+        # Check the actual kernel status
+        kernel_active = ws_manager.tool_manager.jupyter_kernel is not None
+
         return (
             gr.update(value="End Session", variant="secondary"),
-            gr.update(interactive=False),
-            gr.update(interactive=False),
-            gr.update(interactive=False),
+            instructions_value,
+            voice_value,
+            tools_value,
             "🟢 Connected",
-            gr.update(open=False),
+            "🟢 Kernel Ready" if kernel_active else "🔴 No Kernel",
             gr.update(interactive=True),
+            gr.update(interactive=False),
+            gr.update(visible=True),
         )
     else:
         await ws_manager.disconnect()
         return (
             gr.update(value="Start Session", variant="primary"),
-            gr.update(interactive=True),
-            gr.update(interactive=True),
+            instructions_value,
+            voice_value,
+            tools_value,
             "🔴 Disconnected",
-            gr.update(open=True),
+            "🔴 No Kernel",
             gr.update(interactive=False),
+            gr.update(interactive=True),
+            gr.update(visible=False),
         )
 
 
@@ -328,43 +413,70 @@ async def voice_chat_response(audio_data, history):
 
 
 # Add this class after WebSocketManager
-class InstructionsManager:
+class AssistantManager:
     def __init__(self):
-        self.instructions = DEFAULT_INSTRUCTIONS.copy()
-        self.load_instructions()
+        self.assistants = {
+            "General Assistant": {
+                "instructions": "You are a helpful assistant.",
+                "voice": "alloy",
+                "tools": [],
+            },
+            "Spanish Language Teacher": {
+                "instructions": "You are a Spanish (MX) language teacher. Help users practice speaking and correct their grammar and pronunciation.",
+                "voice": "alloy",
+                "tools": [],
+            },
+            "Technical Expert": {
+                "instructions": "You are a technical expert. Provide detailed technical explanations and help debug problems.",
+                "voice": "alloy",
+                "tools": ["get_weather", "get_time"],
+            },
+        }
+        self.load_assistants()
 
-    def load_instructions(self):
+    def load_assistants(self):
         try:
-            with open("instructions.json", "r") as f:
-                saved_instructions = json.load(f)
-                self.instructions.update(saved_instructions)
+            with open("assistants.json", "r") as f:
+                saved_assistants = json.load(f)
+                self.assistants.update(saved_assistants)
         except FileNotFoundError:
-            self.save_instructions()
+            self.save_assistants()
 
-    def save_instructions(self):
-        with open("instructions.json", "w") as f:
-            json.dump(self.instructions, f)
+    def save_assistants(self):
+        with open("assistants.json", "w") as f:
+            json.dump(self.assistants, f)
 
-    def add_instruction(self, name, text):
-        self.instructions[name] = text
-        self.save_instructions()
-        return list(self.instructions.keys())
+    def add_assistant(self, name, data):
+        self.assistants[name] = data
+        self.save_assistants()
+        return list(self.assistants.keys())
 
-    def delete_instruction(self, name):
-        if name in self.instructions and name not in DEFAULT_INSTRUCTIONS:
-            del self.instructions[name]
-            self.save_instructions()
-        return list(self.instructions.keys())
+    def delete_assistant(self, name):
+        if name in self.assistants and name not in DEFAULT_INSTRUCTIONS:
+            del self.assistants[name]
+            self.save_assistants()
+        return list(self.assistants.keys())
 
-    def edit_instruction(self, name, new_text):
-        if name in self.instructions:
-            self.instructions[name] = new_text
-            self.save_instructions()
-        return list(self.instructions.keys())
+    def edit_assistant(self, name, data):
+        if name in self.assistants:
+            self.assistants[name] = data
+            self.save_assistants()
+        return list(self.assistants.keys())
 
 
-# Create a global instructions manager
-instructions_manager = InstructionsManager()
+# Create a global assistant manager
+assistant_manager = AssistantManager()
+
+
+# Add this function after the existing functions
+def update_session_settings(assistant_name):
+    """Update the session settings based on selected assistant"""
+    assistant = assistant_manager.assistants.get(assistant_name, {})
+    return (
+        assistant.get("instructions", "You are a helpful assistant."),
+        assistant.get("voice", "alloy"),
+        assistant.get("tools", []),
+    )
 
 
 # Updated Gradio Interface
@@ -400,62 +512,50 @@ with gr.Blocks(
     document.addEventListener('keyup', shortcuts, false);
     </script>
     <style>
-    #status {
+    #status, #kernel-status {
         background: transparent;
         margin: 0;
         padding: 0.5rem;
+    }
+    .status-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
     }
     </style>
 """
 ) as demo:
     gr.Markdown("<h1 style='text-align: center;'>OpenAI Realtime API</h1>")
-    status_indicator = gr.Markdown("🔴 Disconnected", elem_id="status")
+    with gr.Row(elem_classes="status-container"):
+        status_indicator = gr.Markdown("🔴 Disconnected", elem_id="status")
+        kernel_status = gr.Markdown("🔴 No Kernel", elem_id="kernel-status")
 
     with gr.Tab("VoiceChat"):
         gr.Markdown(
-            "Start a session, then speak to interact with the OpenAI model in real-time."
+            """Start a session, then speak to interact with the OpenAI model in real-time.
+            """
         )
 
-        # Create settings accordion for configuration
-        with gr.Accordion("Settings", open=False) as settings_accordion:
-            with gr.Row():
-                instruction_template = gr.Dropdown(
-                    choices=list(instructions_manager.instructions.keys()),
-                    label="Load Template",
-                    value="General Assistant",
-                )
-            instructions = gr.Textbox(
-                label="Instructions",
-                placeholder="Enter custom instructions for the AI assistant...",
-                value=instructions_manager.instructions["General Assistant"],
-                lines=3,
-            )
-            voice_dropdown = gr.Dropdown(
-                choices=AVAILABLE_VOICES,
-                value="alloy",
-                label="Voice",
-                info="Select the AI voice to use",
-            )
-            # Replace the dropdown with checkboxes
-            tools_checkboxes = gr.CheckboxGroup(
-                choices=[
-                    f.__name__ for f in ws_manager.tool_manager.get_available_tools()
-                ],
-                label="Available Tools",
-                info="Select tools to enable for the AI",
-            )
-            session_btn = create_toggle_button()
+        assistant_template = gr.Dropdown(
+            choices=list(assistant_manager.assistants.keys()),
+            label="Load Assistant",
+            value="General Assistant",
+            interactive=True,
+        )
+        session_btn = create_toggle_button()
 
-        # Add this function to handle template selection
-        def load_template(template_name):
-            return instructions_manager.instructions.get(template_name, "")
-
-        instruction_template.change(
-            fn=load_template, inputs=[instruction_template], outputs=[instructions]
+        instructions = gr.State(
+            assistant_manager.assistants["General Assistant"]["instructions"]
+        )
+        voice_state = gr.State(
+            assistant_manager.assistants["General Assistant"]["voice"]
+        )
+        tools_state = gr.State(
+            assistant_manager.assistants["General Assistant"]["tools"]
         )
 
         # Audio interaction section
-        with gr.Group():
+        with gr.Group(visible=False) as audio_group:
             audio_input = gr.Audio(
                 label="Record your voice (hold spacebar or click record)",
                 sources="microphone",
@@ -466,18 +566,20 @@ with gr.Blocks(
             audio_output = gr.Audio(autoplay=True, render=True)
             history_state = gr.State([])
 
-        # Update the toggle_session function to remove status_text
+        # Update toggle_session function outputs to include kernel_status
         session_btn.click(
             fn=toggle_session,
-            inputs=[session_btn, instructions, voice_dropdown, tools_checkboxes],
+            inputs=[session_btn, instructions, voice_state, tools_state],
             outputs=[
                 session_btn,
                 instructions,
-                voice_dropdown,
-                tools_checkboxes,
+                voice_state,
+                tools_state,
                 status_indicator,
-                settings_accordion,
+                kernel_status,
                 audio_input,
+                assistant_template,
+                audio_group,
             ],
         )
 
@@ -485,6 +587,13 @@ with gr.Blocks(
             fn=voice_chat_response,
             inputs=[audio_input, history_state],
             outputs=[audio_output, history_state, audio_input],
+        )
+
+        # Add this event handler
+        assistant_template.change(
+            fn=update_session_settings,
+            inputs=[assistant_template],
+            outputs=[instructions, voice_state, tools_state],
         )
 
     with gr.Tab("Debug"):
@@ -503,110 +612,203 @@ with gr.Blocks(
 
         refresh_btn.click(fn=update_logs, outputs=[debug_output])
 
-    # Add new tab for managing instructions
-    with gr.Tab("Manage Instructions"):
-        gr.Markdown("Create and manage instruction templates")
+    with gr.Tab("Tool History"):
+        gr.Markdown("View history of tool calls and their results")
+
+        def format_tool_history():
+            history = ws_manager.tool_manager.tool_history
+            if not history:
+                return "No tool calls recorded yet."
+
+            markdown = ""
+            for entry in history:
+                success_icon = "✅" if entry["success"] else "❌"
+                markdown += f"### {success_icon} {entry['tool']}\n"
+                markdown += (
+                    f"**Time:** {entry['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
+                markdown += f"**Duration:** {entry['duration']:.2f}s\n\n"
+                markdown += "**Arguments:**\n```json\n"
+                markdown += json.dumps(entry["arguments"], indent=2) + "\n```\n\n"
+                markdown += "**Result:**\n```json\n"
+                markdown += json.dumps(entry["result"], indent=2) + "\n```\n\n"
+                markdown += "---\n\n"
+            return markdown
+
+        tool_history = gr.Markdown("No tool calls recorded yet.")
+        refresh_history = gr.Button("Refresh History")
+        refresh_history.click(fn=format_tool_history, outputs=[tool_history])
+
+    # Add new tab for managing assistants
+    with gr.Tab("Manage Assistants"):
+        gr.Markdown("Create and manage AI assistants with custom voices and tools")
 
         with gr.Row():
             with gr.Column(scale=1):
-                template_list = gr.Dropdown(
-                    choices=["None"] + list(instructions_manager.instructions.keys()),
-                    label="Select Template",
+                assistant_list = gr.Dropdown(
+                    choices=["None"] + list(assistant_manager.assistants.keys()),
+                    label="Select Assistant",
                     value="None",
                 )
 
-                new_template_btn = gr.Button("Create New Template", variant="primary")
-                delete_btn = gr.Button("Delete Selected Template", variant="stop")
+                new_assistant_btn = gr.Button("Create New Assistant", variant="primary")
+                delete_btn = gr.Button("Delete Selected Assistant", variant="stop")
 
             with gr.Column(scale=2):
-                template_name = gr.Textbox(
-                    label="Template Name",
-                    placeholder="Enter template name...",
+                assistant_name = gr.Textbox(
+                    label="Assistant Name",
+                    placeholder="Enter assistant name...",
                     interactive=True,
                 )
-                template_text = gr.Textbox(
-                    label="Template Instructions",
-                    placeholder="Enter the instructions for this template...",
+                assistant_voice = gr.Dropdown(
+                    choices=AVAILABLE_VOICES,
+                    label="Voice",
+                    value="alloy",
+                )
+
+                # Replace static markdown with dynamic documentation
+                gr.Markdown(magic_manager.get_documentation())
+
+                assistant_instructions = gr.Textbox(
+                    label="Instructions",
+                    placeholder="Enter the instructions for this assistant...",
                     lines=5,
                     interactive=True,
                 )
+                assistant_tools = gr.CheckboxGroup(
+                    choices=[
+                        f.__name__
+                        for f in ws_manager.tool_manager.get_available_tools()
+                    ],
+                    label="Tools",
+                    info="Select tools to enable for this assistant",
+                )
                 save_btn = gr.Button("Save Changes", variant="primary")
 
-        # Add these helper functions
-        def load_template_details(template_name):
-            if template_name == "None":
-                return "", "", gr.update(interactive=False)
-            text = instructions_manager.instructions.get(template_name, "")
+        # Update the helper functions
+        def load_assistant_details(assistant_name):
+            if assistant_name == "None":
+                return "", "alloy", "", [], gr.update(interactive=False)
+            assistant = assistant_manager.assistants.get(assistant_name, {})
             return (
-                template_name,
-                text,
-                gr.update(interactive=template_name not in DEFAULT_INSTRUCTIONS),
+                assistant_name,
+                assistant.get("voice", "alloy"),
+                assistant.get("instructions", ""),
+                assistant.get("tools", []),
+                gr.update(interactive=assistant_name not in DEFAULT_INSTRUCTIONS),
             )
 
-        def save_template_changes(name, text):
-            if name in instructions_manager.instructions:
-                instructions_manager.edit_instruction(name, text)
-                choices = ["None"] + list(instructions_manager.instructions.keys())
-                return gr.update(choices=choices), "Template updated successfully!"
+        def save_assistant_changes(name, voice, instructions, tools):
+            data = {
+                "voice": voice,
+                "instructions": instructions,
+                "tools": tools,
+            }
+
+            if name in assistant_manager.assistants:
+                assistant_manager.edit_assistant(name, data)
+                choices = ["None"] + list(assistant_manager.assistants.keys())
+                # Update both dropdowns
+                return (
+                    gr.update(choices=choices),
+                    gr.update(choices=list(assistant_manager.assistants.keys())),
+                    "Assistant updated successfully!",
+                )
             else:
-                instructions_manager.add_instruction(name, text)
-                choices = ["None"] + list(instructions_manager.instructions.keys())
-                return gr.update(choices=choices, value=name), "New template created!"
+                assistant_manager.add_assistant(name, data)
+                choices = ["None"] + list(assistant_manager.assistants.keys())
+                # Update both dropdowns
+                return (
+                    gr.update(choices=choices, value=name),
+                    gr.update(choices=list(assistant_manager.assistants.keys())),
+                    "New assistant created!",
+                )
 
-        def create_new_template():
-            return "", "", gr.update(interactive=True)
+        def create_new_assistant():
+            return "", "alloy", "", [], gr.update(interactive=True)
 
-        def delete_current_template(name):
+        def delete_current_assistant(name):
             if name in DEFAULT_INSTRUCTIONS:
                 return (
                     gr.update(
-                        choices=["None"]
-                        + list(instructions_manager.instructions.keys())
+                        choices=["None"] + list(assistant_manager.assistants.keys())
                     ),
                     "None",
+                    "alloy",
                     "",
+                    [],
                     gr.update(interactive=False),
-                    "Cannot delete default templates!",
+                    gr.update(choices=list(assistant_manager.assistants.keys())),
+                    "Cannot delete default assistants!",
                 )
 
-            instructions_manager.delete_instruction(name)
-            choices = ["None"] + list(instructions_manager.instructions.keys())
+            assistant_manager.delete_assistant(name)
+            choices = ["None"] + list(assistant_manager.assistants.keys())
             return (
                 gr.update(choices=choices),
                 "None",
+                "alloy",
                 "",
+                [],
                 gr.update(interactive=False),
-                "Template deleted successfully!",
+                gr.update(choices=list(assistant_manager.assistants.keys())),
+                "Assistant deleted successfully!",
             )
 
         # Update the event handlers
-        template_list.change(
-            fn=load_template_details,
-            inputs=[template_list],
-            outputs=[template_name, template_text, delete_btn],
+        assistant_list.change(
+            fn=load_assistant_details,
+            inputs=[assistant_list],
+            outputs=[
+                assistant_name,
+                assistant_voice,
+                assistant_instructions,
+                assistant_tools,
+                delete_btn,
+            ],
         )
 
-        new_template_btn.click(
-            fn=create_new_template, outputs=[template_name, template_text, delete_btn]
+        new_assistant_btn.click(
+            fn=create_new_assistant,
+            outputs=[
+                assistant_name,
+                assistant_voice,
+                assistant_instructions,
+                assistant_tools,
+                delete_btn,
+            ],
         )
 
         save_btn.click(
-            fn=save_template_changes,
-            inputs=[template_name, template_text],
-            outputs=[template_list, gr.Textbox(visible=False)],  # For success message
+            fn=save_assistant_changes,
+            inputs=[
+                assistant_name,
+                assistant_voice,
+                assistant_instructions,
+                assistant_tools,
+            ],
+            outputs=[
+                assistant_list,
+                assistant_template,
+                gr.Textbox(visible=False),
+            ],
         )
 
         delete_btn.click(
-            fn=delete_current_template,
-            inputs=[template_name],
+            fn=delete_current_assistant,
+            inputs=[assistant_name],
             outputs=[
-                template_list,
-                template_name,
-                template_text,
+                assistant_list,
+                assistant_name,
+                assistant_voice,
+                assistant_instructions,
+                assistant_tools,
                 delete_btn,
-                gr.Textbox(visible=False),  # For success message
+                assistant_template,
+                gr.Textbox(visible=False),
             ],
         )
+
 
 if __name__ == "__main__":
     demo.launch()
