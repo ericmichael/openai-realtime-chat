@@ -15,13 +15,10 @@ class Document(Base):
     published = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Add polymorphic identity
-    __mapper_args__ = {"polymorphic_identity": "Document"}
-
     # Define the relationship here instead of as a backref
     vector_embeddings = relationship(
         "VectorEmbedding",
+        foreign_keys="[VectorEmbedding.vectorizable_id]",
         primaryjoin="and_(Document.id==VectorEmbedding.vectorizable_id, "
         'VectorEmbedding.vectorizable_type=="Document")',
         back_populates="document",

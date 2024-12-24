@@ -31,9 +31,7 @@ class VectorEmbedding(Base):
 
     id = Column(Integer, primary_key=True)
     vectorizable_type = Column(String(255), nullable=False)
-    vectorizable_id = Column(
-        Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
-    )
+    vectorizable_id = Column(Integer, nullable=False)
     field_name = Column(String(255), nullable=False)
     vector = Column(Vector(1536), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -45,16 +43,21 @@ class VectorEmbedding(Base):
     total_chunks = Column(Integer)
     content = Column(Text)
 
-    # Define relationship back to Document without backref
+    # Define relationships without backrefs
     document = relationship(
         "Document",
         foreign_keys=[vectorizable_id],
         primaryjoin="and_(VectorEmbedding.vectorizable_id==Document.id, "
-        'VectorEmbedding.vectorizable_type=="Document")',
-        back_populates="vector_embeddings",
+        "VectorEmbedding.vectorizable_type=='Document')",
     )
 
-    # Add check constraints
+    node = relationship(
+        "Node",
+        foreign_keys=[vectorizable_id],
+        primaryjoin="and_(VectorEmbedding.vectorizable_id==Node.id, "
+        "VectorEmbedding.vectorizable_type=='Node')",
+    )
+
     __table_args__ = (
         CheckConstraint(
             "chunk_index < total_chunks", name="check_chunk_index_within_bounds"

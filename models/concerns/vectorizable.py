@@ -4,10 +4,11 @@ import os
 from pathlib import Path
 from jinja2 import Template
 from sqlalchemy import event, func
-from sqlalchemy.orm import relationship, Session
+from sqlalchemy.orm import relationship, Session, foreign, remote
 from functools import wraps
 from openai import OpenAI
 from ..vector_embedding import VectorEmbedding
+from sqlalchemy import and_
 
 
 class VectorizableRegistry:
@@ -25,8 +26,13 @@ class VectorizableRegistry:
 class VectorizableConfiguration:
     """Configuration mixin for vectorizable models"""
 
-    vector_configurations: Dict[str, Dict] = {}
-    registered_templates: Dict[str, str] = {}
+    @classmethod
+    def _ensure_configurations(cls):
+        """Ensure configuration dictionaries exist"""
+        if not hasattr(cls, "vector_configurations"):
+            cls.vector_configurations = {}
+        if not hasattr(cls, "registered_templates"):
+            cls.registered_templates = {}
 
     @classmethod
     def vectorizes(
@@ -39,6 +45,7 @@ class VectorizableConfiguration:
         template: Optional[str] = None,
     ) -> None:
         """Configure vector embedding for a field"""
+        cls._ensure_configurations()  # Ensure configurations exist
         normalized_chunking = cls._normalize_chunking_config(chunking)
 
         cls.vector_configurations[method_name] = {
@@ -50,10 +57,12 @@ class VectorizableConfiguration:
 
     @classmethod
     def register_template(cls, path: str, content: str) -> None:
+        cls._ensure_configurations()  # Ensure configurations exist
         cls.registered_templates[path] = content
 
     @classmethod
     def clear_registered_templates(cls) -> None:
+        cls._ensure_configurations()  # Ensure configurations exist
         cls.registered_templates = {}
 
     @staticmethod
@@ -76,9 +85,9 @@ class VectorizableConfiguration:
         if self.registered_templates.get(template_path):
             template_content = self.registered_templates[template_path]
         else:
-            template_file = Path("app/views") / f"{template_path}.j2"
+            template_file = Path("app/views") / template_path
             if not template_file.exists():
-                raise ValueError(f"Template not found at path: {template_path}.j2")
+                raise ValueError(f"Template not found at path: {template_file}")
             template_content = template_file.read_text()
 
         template = Template(template_content)
@@ -389,9 +398,14 @@ def vectorizable(cls):
     # Register the model
     VectorizableRegistry.register(cls)
 
-    # Add vector_embeddings relationship
+    # Add vector_embeddings relationship with explicit foreign/remote annotations
     cls.vector_embeddings = relationship(
-        "VectorEmbedding", backref="vectorizable", cascade="all, delete-orphan"
+        "VectorEmbedding",
+        primaryjoin=and_(
+            foreign(remote(VectorEmbedding.vectorizable_id)) == cls.id,
+            foreign(remote(VectorEmbedding.vectorizable_type)) == cls.__name__
+        ),
+        cascade="all, delete-orphan",
     )
 
     # Mix in the vectorizable functionality
@@ -406,7 +420,10 @@ def vectorizable(cls):
     def nullify_changed_embeddings(mapper, connection, target):
         for field_name in target.vector_configurations:
             if hasattr(target, f"{field_name}_changed"):
-                target.vector_embeddings.filter_by(field_name=field_name).delete()
+                target.vector_embeddings = [
+                    ve for ve in target.vector_embeddings 
+                    if ve.field_name != field_name
+                ]
 
     # Register after_commit event on the Session instead of the model
     @event.listens_for(Session, "after_commit")

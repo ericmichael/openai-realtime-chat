@@ -1,0 +1,12 @@
+{{ item.name }} ({{ item.node_type }})
+
+Description:
+{{ item.description or "No description available." }}
+
+Relationships:
+{% for edge in item.outgoing_edges %}
+- {{ item.name }} {{ edge.relationship_type }} {{ edge.target.name }}
+{% endfor %}
+{% for edge in item.incoming_edges %}
+- {{ edge.source.name }} {{ edge.relationship_type }} {{ item.name }}
+{% endfor %} 
