@@ -10,3 +10,10 @@ resampy
 jupyter-client
 ipython
 ipykernel
+sqlalchemy
+psycopg2-binary
+psycopg
+sqlalchemy-utils
+jinja2>=3.0.0
+pgvector
+openai

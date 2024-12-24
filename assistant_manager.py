@@ -1,5 +1,4 @@
-import json
-from typing import Dict, Any, List
+from services.assistant_service import AssistantService
 
 AVAILABLE_VOICES = [
     "alloy",
@@ -22,121 +21,68 @@ DEFAULT_INSTRUCTIONS = {
 class AssistantManager:
     def __init__(self):
         self.available_voices = AVAILABLE_VOICES
-        self.assistants: Dict[str, Dict[str, Any]] = {
-            "General Assistant": {
-                "instructions": DEFAULT_INSTRUCTIONS["General Assistant"],
-                "voice": "alloy",
-                "tools": [],
-            },
-            "Spanish Language Teacher": {
-                "instructions": DEFAULT_INSTRUCTIONS["Spanish Language Teacher"],
-                "voice": "alloy",
-                "tools": [],
-            },
-            "Technical Expert": {
-                "instructions": DEFAULT_INSTRUCTIONS["Technical Expert"],
-                "voice": "alloy",
-                "tools": ["get_weather", "get_time"],
-            },
+        self.service = AssistantService()
+
+        # Initialize default assistants if they don't exist
+        self._initialize_defaults()
+
+    def _initialize_defaults(self):
+        """Initialize default assistants in the database if they don't exist"""
+        for name, instructions in DEFAULT_INSTRUCTIONS.items():
+            assistant = self.service.get_assistant_by_name(name)
+            if not assistant:
+                self.service.create_assistant(
+                    name=name,
+                    instructions=instructions,
+                    voice="alloy",
+                    tools=(
+                        []
+                        if name != "Technical Expert"
+                        else ["get_weather", "get_time"]
+                    ),
+                )
+
+    def get_all_assistants(self):
+        """Get all assistant configurations."""
+        return self.service.get_all_assistants()
+
+    def get_assistant(self, name):
+        """Get an assistant's configuration by name."""
+        assistant = self.service.get_assistant_by_name(name)
+        if assistant:
+            return assistant.to_dict()
+        return {
+            "instructions": "You are a helpful assistant.",
+            "voice": "alloy",
+            "tools": [],
         }
-        self.load_assistants()
 
-    def load_assistants(self) -> None:
-        """Load assistants from the JSON file, merging with existing defaults."""
-        try:
-            with open("assistants.json", "r") as f:
-                saved_assistants = json.load(f)
-                self.assistants.update(saved_assistants)
-        except FileNotFoundError:
-            self.save_assistants()
-
-    def save_assistants(self) -> None:
-        """Save current assistants to the JSON file."""
-        with open("assistants.json", "w") as f:
-            json.dump(self.assistants, f, indent=2)
-
-    def add_assistant(self, name: str, data: Dict[str, Any]) -> List[str]:
-        """
-        Add a new assistant with the given name and data.
-
-        Args:
-            name: Name of the new assistant
-            data: Dictionary containing assistant configuration
-
-        Returns:
-            List of all assistant names
-        """
-        self.assistants[name] = data
-        self.save_assistants()
-        return list(self.assistants.keys())
-
-    def delete_assistant(self, name: str) -> List[str]:
-        """
-        Delete an assistant by name, if it's not a default assistant.
-
-        Args:
-            name: Name of the assistant to delete
-
-        Returns:
-            List of remaining assistant names
-        """
-        if name in self.assistants and name not in DEFAULT_INSTRUCTIONS:
-            del self.assistants[name]
-            self.save_assistants()
-        return list(self.assistants.keys())
-
-    def edit_assistant(self, name: str, data: Dict[str, Any]) -> List[str]:
-        """
-        Edit an existing assistant's configuration.
-
-        Args:
-            name: Name of the assistant to edit
-            data: New configuration data
-
-        Returns:
-            List of all assistant names
-        """
-        if name in self.assistants:
-            self.assistants[name] = data
-            self.save_assistants()
-        return list(self.assistants.keys())
-
-    def get_assistant(self, name: str) -> Dict[str, Any]:
-        """
-        Get an assistant's configuration by name.
-
-        Args:
-            name: Name of the assistant
-
-        Returns:
-            Assistant configuration dictionary
-        """
-        return self.assistants.get(
-            name,
-            {
-                "instructions": "You are a helpful assistant.",
-                "voice": "alloy",
-                "tools": [],
-            },
+    def add_assistant(self, name, data):
+        """Add a new assistant with the given name and data."""
+        self.service.create_assistant(
+            name=name,
+            instructions=data["instructions"],
+            voice=data["voice"],
+            tools=data.get("tools", []),
         )
+        return list(self.get_all_assistants().keys())
 
-    def get_all_assistants(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Get all assistant configurations.
+    def delete_assistant(self, name):
+        """Delete an assistant by name, if it's not a default assistant."""
+        if name not in DEFAULT_INSTRUCTIONS:
+            self.service.delete_assistant(name)
+        return list(self.get_all_assistants().keys())
 
-        Returns:
-            Dictionary of all assistants and their configurations
-        """
-        return self.assistants.copy()
+    def edit_assistant(self, name, data):
+        """Edit an existing assistant's configuration."""
+        self.service.update_assistant(
+            name=name,
+            instructions=data["instructions"],
+            voice=data["voice"],
+            tools=data.get("tools", []),
+        )
+        return list(self.get_all_assistants().keys())
 
-    def is_default_assistant(self, name: str) -> bool:
-        """
-        Check if an assistant is a default assistant.
-
-        Args:
-            name: Name of the assistant to check
-
-        Returns:
-            True if the assistant is a default assistant, False otherwise
-        """
+    def is_default_assistant(self, name):
+        """Check if an assistant is a default assistant."""
         return name in DEFAULT_INSTRUCTIONS

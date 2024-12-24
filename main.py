@@ -10,12 +10,41 @@ import numpy as np
 from magic_variables import magic_manager
 from assistant_manager import AssistantManager, DEFAULT_INSTRUCTIONS
 from websocket_manager import WebSocketManager
+from services.document_service import DocumentService
+from models.base import Session
+from models.vector_embedding import VectorEmbedding
+import pandas as pd
 
 load_dotenv()
 
-# Create a global WebSocket manager
 ws_manager = WebSocketManager()
 assistant_manager = AssistantManager()
+document_service = DocumentService()
+
+
+def format_embeddings():
+    """Format all embeddings for display in a DataFrame"""
+    with Session() as session:
+        embeddings = session.query(VectorEmbedding).all()
+
+    if not embeddings:
+        return gr.update(value=pd.DataFrame(), visible=False)
+
+    # Format the embeddings into a list of dictionaries
+    formatted_data = [
+        {
+            "Document": f"{e.vectorizable_type} #{e.vectorizable_id}",
+            "Field": e.field_name,
+            "Chunk": f"{e.chunk_index + 1}/{e.total_chunks}",
+            "Content": e.content[:100] + "..." if len(e.content) > 100 else e.content,
+            "Created": e.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        for e in embeddings
+    ]
+
+    # Convert to DataFrame
+    df = pd.DataFrame(formatted_data)
+    return gr.update(value=df, visible=True)
 
 
 def create_toggle_button():
@@ -137,6 +166,54 @@ async def voice_chat_response(audio_data, history):
             return buffered.getvalue(), history, None
 
     return None, history, None
+
+
+def perform_vector_search(query, field_name, limit):
+    """Perform vector similarity search and return results"""
+    if not query:
+        return gr.update(visible=False)
+
+    print(f"\n=== Vector Search ===")
+    print(f"Query: {query}")
+    print(f"Field: {field_name}")
+    print(f"Limit: {limit}")
+
+    with Session() as session:
+        results = VectorEmbedding.embedding_search(
+            query=query,
+            field_name=field_name if field_name != "All Fields" else None,
+            limit=int(limit),
+            session=session,
+        )
+
+        if not results:
+            print("No results found")
+            return gr.update(value=[], visible=True)
+
+        # Debug the raw results
+        print(f"\nFound {len(results)} results:")
+        for result in results:
+            print(f"\nDocument: {result.vectorizable_type} #{result.vectorizable_id}")
+            print(f"Score: {result.similarity_score:.3f}")
+            print(f"Full Content: {result.content}")
+            print("-" * 50)
+
+        # Format results for display
+        formatted_results = [
+            {
+                "Score": f"{result.similarity_score:.3f}",
+                "Document Title": f"{result.vectorizable_type} #{result.vectorizable_id}",
+                "Content Preview": (
+                    result.content[:100] + "..."
+                    if len(result.content) > 100
+                    else result.content
+                ),
+            }
+            for result in results
+        ]
+
+        df = pd.DataFrame(formatted_results)
+        return gr.update(value=df, visible=True)
 
 
 # Updated Gradio Interface
@@ -319,6 +396,52 @@ with gr.Blocks(
         refresh_history = gr.Button("Refresh History")
         refresh_history.click(fn=format_tool_history, outputs=[tool_history])
 
+    # Add new tab for viewing vector embeddings
+    with gr.Tab("Vector Embeddings"):
+        gr.Markdown("View and search vector embeddings in the system")
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                search_query = gr.Textbox(
+                    label="Search Query", placeholder="Enter text to search...", lines=3
+                )
+                search_field = gr.Dropdown(
+                    choices=["content"],  # Add more fields as needed
+                    label="Search Field",
+                    value="content",
+                )
+                search_limit = gr.Slider(
+                    minimum=1, maximum=50, value=10, step=1, label="Result Limit"
+                )
+                search_button = gr.Button("Search Embeddings", variant="primary")
+
+            with gr.Column(scale=2):
+                search_results = gr.Dataframe(
+                    headers=["Score", "Document Title", "Content Preview"],
+                    label="Search Results",
+                    visible=False,
+                )
+
+        gr.Markdown("### All Embeddings")
+        embeddings_display = gr.DataFrame(
+            headers=["Document", "Field", "Chunk", "Content", "Created"],
+            label="All Embeddings",
+        )
+        refresh_embeddings = gr.Button("Refresh Embeddings")
+
+        # Wire up the search functionality
+        search_button.click(
+            fn=perform_vector_search,
+            inputs=[search_query, search_field, search_limit],
+            outputs=[search_results],
+        )
+
+        # Wire up the refresh functionality
+        refresh_embeddings.click(fn=format_embeddings, outputs=[embeddings_display])
+
+        # Initial load of embeddings
+        embeddings_display.value = format_embeddings()
+
     # Add new tab for managing assistants
     with gr.Tab("Manage Assistants"):
         gr.Markdown("Create and manage AI assistants with custom voices and tools")
@@ -498,6 +621,125 @@ with gr.Blocks(
             ],
         )
 
+    # Add new tab for managing documents
+    with gr.Tab("Manage Documents"):
+        gr.Markdown("Create and manage documents")
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                document_list = gr.Dropdown(
+                    choices=["None"],  # We'll populate this dynamically
+                    label="Select Document",
+                    value="None",
+                )
+
+                new_document_btn = gr.Button("Create New Document", variant="primary")
+                delete_document_btn = gr.Button(
+                    "Delete Selected Document", variant="stop"
+                )
+
+            with gr.Column(scale=2):
+                document_title = gr.Textbox(
+                    label="Document Title",
+                    placeholder="Enter document title...",
+                    interactive=True,
+                )
+                document_content = gr.TextArea(
+                    label="Content",
+                    placeholder="Enter the document content...",
+                    lines=10,
+                    interactive=True,
+                )
+                document_published = gr.Checkbox(
+                    label="Published",
+                    value=False,
+                    interactive=True,
+                )
+                save_document_btn = gr.Button("Save Changes", variant="primary")
+
+    # Add the necessary event handlers
+    def load_document_list():
+        documents = document_service.get_all_documents()
+        # Convert to list of tuples (label, value) for the dropdown
+        return [("None", "None")] + [(title, title) for title in documents.keys()]
+
+    def load_document(title):
+        if title == "None":
+            return "", "", False
+        document = document_service.get_document_by_title(title)
+        if document:
+            return document.title, document.content, document.published
+        return "", "", False
+
+    def create_new_document():
+        return "", "", False, gr.update(value="None")
+
+    def save_document(title, content, published, current_selection):
+        if not title:
+            return "Please enter a title", gr.update(choices=load_document_list())
+
+        if current_selection == "None":
+            document_service.create_document(title, content, published)
+        else:
+            document_service.update_document(current_selection, content, published)
+            if current_selection != title:
+                document_service.delete_document(current_selection)
+                document_service.create_document(title, content, published)
+
+        return "Document saved successfully!", gr.update(choices=load_document_list())
+
+    def delete_document(title):
+        if title and title != "None":
+            document_service.delete_document(title)
+            return (
+                "",
+                "",
+                False,
+                "Document deleted successfully!",
+                gr.update(choices=load_document_list()),
+            )
+        return (
+            "",
+            "",
+            False,
+            "No document selected",
+            gr.update(choices=load_document_list()),
+        )
+
+    # Wire up the event handlers
+    document_list.change(
+        load_document,
+        inputs=[document_list],
+        outputs=[document_title, document_content, document_published],
+    )
+
+    new_document_btn.click(
+        create_new_document,
+        outputs=[document_title, document_content, document_published, document_list],
+    )
+
+    save_document_btn.click(
+        save_document,
+        inputs=[document_title, document_content, document_published, document_list],
+        outputs=[gr.Textbox(visible=False), document_list],
+    )
+
+    delete_document_btn.click(
+        delete_document,
+        inputs=[document_list],
+        outputs=[
+            document_title,
+            document_content,
+            document_published,
+            gr.Textbox(visible=False),
+            document_list,
+        ],
+    )
+
+    # Initialize document list
+    document_list.choices = load_document_list()
 
 if __name__ == "__main__":
+    demo.launch()
+
     demo.launch()
