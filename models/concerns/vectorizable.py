@@ -300,7 +300,7 @@ class VectorizableSearch:
             if threshold:
                 base_query = base_query.having(func.min(similarity_score) <= threshold)
 
-            base_query = base_query.order_by(func.min(similarity_score))
+            base_query = base_query.order_by(func.min(similarity_score).desc())
         else:
             # Treat each chunk as separate result
             base_query = base_query.with_entities(cls, similarity_score.label("score"))
@@ -308,7 +308,7 @@ class VectorizableSearch:
             if threshold:
                 base_query = base_query.filter(similarity_score <= threshold)
 
-            base_query = base_query.order_by(similarity_score)
+            base_query = base_query.order_by(similarity_score.desc())
 
         if limit:
             base_query = base_query.limit(limit)

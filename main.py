@@ -192,25 +192,34 @@ def perform_vector_search(query, field_name, limit):
 
         # Debug the raw results
         print(f"\nFound {len(results)} results:")
+        formatted_results = []
+
         for result in results:
-            print(f"\nDocument: {result.vectorizable_type} #{result.vectorizable_id}")
-            print(f"Score: {result.similarity_score:.3f}")
-            print(f"Full Content: {result.content}")
+            # Extract values from the SQLAlchemy Row object
+            vectorizable_type = result[0]
+            vectorizable_id = result[1]
+            field = result[2]
+            score = result[3]
+            chunks = result[4] if len(result) > 4 else None
+
+            print(f"\nDocument: {vectorizable_type} #{vectorizable_id}")
+            print(f"Field: {field}")
+            print(f"Score: {score:.3f}")
+            if chunks:
+                print(f"Chunks: {chunks}")
             print("-" * 50)
 
-        # Format results for display
-        formatted_results = [
-            {
-                "Score": f"{result.similarity_score:.3f}",
-                "Document Title": f"{result.vectorizable_type} #{result.vectorizable_id}",
-                "Content Preview": (
-                    result.content[:100] + "..."
-                    if len(result.content) > 100
-                    else result.content
-                ),
-            }
-            for result in results
-        ]
+            # Format for display
+            formatted_results.append(
+                {
+                    "Score": f"{score:.3f}",
+                    "Document Title": f"{vectorizable_type} #{vectorizable_id}",
+                    "Field": field,
+                    "Content Preview": (
+                        chunks[0]["content"][:100] + "..." if chunks else "N/A"
+                    ),
+                }
+            )
 
         df = pd.DataFrame(formatted_results)
         return gr.update(value=df, visible=True)

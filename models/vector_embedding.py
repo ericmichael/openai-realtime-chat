@@ -23,6 +23,7 @@ from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from .base import Base
 from openai import OpenAI
+from typing import Optional
 
 
 class VectorEmbedding(Base):
@@ -139,9 +140,7 @@ class VectorEmbedding(Base):
     @classmethod
     def order_clause(cls, metric):
         """Generate order clause for vector similarity"""
-        return (
-            desc("similarity_score") if metric == "inner" else asc("similarity_score")
-        )
+        return desc("similarity_score")
 
     @staticmethod
     def _distance_operator(metric):
@@ -185,11 +184,22 @@ class VectorEmbedding(Base):
         *,
         field_name: str = None,
         metric: str = "cosine",
-        limit: int = 10,
-        threshold: float = None,
+        limit: Optional[int] = None,
+        threshold: Optional[float] = None,
+        combine_chunks: bool = True,
         session=None,
     ):
-        """Search across all vector embeddings."""
+        """Search across all vector embeddings.
+
+        Args:
+            query: The search query text
+            field_name: Optional field name to filter by
+            metric: Similarity metric ('cosine', 'l2', or 'inner')
+            limit: Maximum number of results to return
+            threshold: Minimum similarity threshold
+            combine_chunks: Whether to combine chunks from the same document
+            session: SQLAlchemy session
+        """
         if not session:
             raise ValueError("Session is required")
 
@@ -205,33 +215,61 @@ class VectorEmbedding(Base):
         # Calculate similarity score
         similarity_score = cls.similarity_score_sql(embedding, metric)
 
-        # Build query with specific columns
-        query = session.query(
-            cls.id,
-            cls.vectorizable_type,
-            cls.vectorizable_id,
-            cls.field_name,
-            cls.content,
-            cls.chunk_index,
-            cls.total_chunks,
-            cls.embedding_metadata,
-            similarity_score,
-        )
+        # Build base query
+        if combine_chunks:
+            # Group by the document and select best matching chunk
+            base_query = session.query(
+                cls.vectorizable_type,
+                cls.vectorizable_id,
+                cls.field_name,
+                func.min(similarity_score).label("score"),
+                func.jsonb_agg(
+                    func.jsonb_build_object(
+                        "content",
+                        cls.content,
+                        "chunk_index",
+                        cls.chunk_index,
+                        "total_chunks",
+                        cls.total_chunks,
+                        "metadata",
+                        cls.embedding_metadata,
+                    )
+                ).label("chunks"),
+            )
 
-        if field_name:
-            query = query.filter(cls.field_name == field_name)
+            if field_name:
+                base_query = base_query.filter(cls.field_name == field_name)
 
-        if threshold:
-            threshold_op = "<=" if metric == "l2" else ">="
-            query = query.filter(similarity_score.op(threshold_op)(threshold))
+            base_query = base_query.group_by(
+                cls.vectorizable_type, cls.vectorizable_id, cls.field_name
+            )
 
-        # Order by similarity
-        order_expr = (
-            asc("similarity_score") if metric == "l2" else desc("similarity_score")
-        )
-        query = query.order_by(order_expr)
+            if threshold:
+                base_query = base_query.having(func.min(similarity_score) <= threshold)
+
+            base_query = base_query.order_by(func.min(similarity_score))
+        else:
+            # Return individual chunks as separate results
+            base_query = session.query(
+                cls.vectorizable_type,
+                cls.vectorizable_id,
+                cls.field_name,
+                cls.content,
+                cls.chunk_index,
+                cls.total_chunks,
+                cls.embedding_metadata,
+                similarity_score.label("score"),
+            )
+
+            if field_name:
+                base_query = base_query.filter(cls.field_name == field_name)
+
+            if threshold:
+                base_query = base_query.filter(similarity_score <= threshold)
+
+            base_query = base_query.order_by(similarity_score)
 
         if limit:
-            query = query.limit(limit)
+            base_query = base_query.limit(limit)
 
-        return query.all()
+        return base_query.all()
