@@ -1,0 +1,12 @@
+#status,
+#kernel-status {
+    background: transparent;
+    margin: 0;
+    padding: 0.5rem;
+}
+
+.status-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}

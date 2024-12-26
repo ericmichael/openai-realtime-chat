@@ -1,5 +1,5 @@
-from models.base import Session
-from models.document import Document
+from app.models.base import Session
+from app.models.document import Document
 
 
 class DocumentService:

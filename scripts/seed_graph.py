@@ -1,16 +1,11 @@
-import os
-import sys
-from pathlib import Path
-
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.append(str(project_root))
-
-from models.base import Session, Base, engine
-from models.node import Node
+from app.models.base import Session, Base, engine
+from app.models.node import Node
+from app.config import Config
 
 
 def seed_database():
+    print(f"Seeding database {Config.POSTGRES_DB}...")
+
     # Create all tables
     Base.metadata.create_all(engine)
 
@@ -59,8 +54,8 @@ def seed_database():
         # Flush to get IDs and commit to save nodes
         session.commit()
 
-        # Before syncing
-        print(f"Vector configurations: {nodes['tolkien'].vector_configurations}")
+        if Config.DEBUG:
+            print(f"Vector configurations: {nodes['tolkien'].vector_configurations}")
 
         # Sync embeddings for all nodes
         for node in nodes.values():
@@ -86,16 +81,17 @@ def seed_database():
 
         print("Database seeded successfully!")
 
-        # Example semantic search
-        print("\nTesting semantic search:")
-        results = Node.semantic_search(
-            "Who created the world where hobbits live?", session=session, limit=3
-        )
+        if Config.DEBUG:
+            # Example semantic search
+            print("\nTesting semantic search:")
+            results = Node.semantic_search(
+                "Who created the world where hobbits live?", session=session, limit=3
+            )
 
-        for node, score in results:  # Unpack the tuple of (node, score)
-            print(f"\nScore: {score}")
-            print(f"Node: {node.name}")
-            print(f"Type: {node.node_type}")
+            for node, score in results:
+                print(f"\nScore: {score}")
+                print(f"Node: {node.name}")
+                print(f"Type: {node.node_type}")
 
     except Exception as e:
         print(f"Error seeding database: {e}")

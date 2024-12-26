@@ -3,19 +3,18 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 import os
+from app.config import Config
 
 # Load environment variables from .env file
 load_dotenv()
 
 Base = declarative_base()
-engine = create_engine(
-    f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}"
-    f"@{os.getenv('POSTGRES_HOST')}/{os.getenv('POSTGRES_DB')}"
-)
 
+# Create engine using config
+engine = create_engine(Config.get_database_url())
 Session = sessionmaker(bind=engine)
 
-# Create the vector extension if it doesn't exist
+# Create vector extension
 with engine.connect() as connection:
     connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     connection.commit()

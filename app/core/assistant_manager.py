@@ -1,4 +1,4 @@
-from services.assistant_service import AssistantService
+from app.services.assistant import AssistantService
 
 AVAILABLE_VOICES = [
     "alloy",

@@ -1,28 +1,17 @@
-import os
-import sys
-from pathlib import Path
 from sqlalchemy.sql import text
-
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.append(str(project_root))
-
-from models.base import Base, engine
+from app.models.base import Base, engine
+from app.config import Config
 
 
 def drop_all_tables():
-    print("Dropping all tables...")
-    # Drop tables in order of dependencies
+    print(f"Dropping all tables in database {Config.POSTGRES_DB}...")
     try:
-        # First drop vector_embeddings (it depends on other tables)
+        # Drop tables in order of dependencies
         Base.metadata.tables["vector_embeddings"].drop(engine, checkfirst=True)
-
-        # Then drop edges (it depends on nodes)
         Base.metadata.tables["edges"].drop(engine, checkfirst=True)
-
-        # Then drop the main tables
         Base.metadata.tables["documents"].drop(engine, checkfirst=True)
         Base.metadata.tables["nodes"].drop(engine, checkfirst=True)
+        Base.metadata.tables["assistants"].drop(engine, checkfirst=True)
 
         print("All tables dropped successfully!")
     except Exception as e:
@@ -32,7 +21,15 @@ def drop_all_tables():
         with engine.connect() as conn:
             conn.execute(
                 text(
-                    "DROP TABLE IF EXISTS vector_embeddings, edges, documents, nodes CASCADE"
+                    """
+                    DROP TABLE IF EXISTS 
+                        vector_embeddings, 
+                        edges, 
+                        documents, 
+                        nodes,
+                        assistants 
+                    CASCADE
+                    """
                 )
             )
             conn.commit()

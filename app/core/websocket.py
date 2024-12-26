@@ -7,8 +7,9 @@ import numpy as np
 import librosa
 import soundfile as sf
 from datetime import datetime
-from tools import ToolManager
-from magic_variables import magic_manager
+from app.core.tools import ToolManager
+from app.utils.magic_variables import magic_manager
+from app.config import Config
 
 
 class WebSocketManager:
@@ -26,6 +27,8 @@ class WebSocketManager:
         self.selected_tools = []
         self.jupyter_kernel = None
         self.session_id = None
+        self.api_key = Config.OPENAI_API_KEY
+        self.debug = Config.DEBUG
 
     def _log_event(self, direction: str, event: str):
         """Helper to log WebSocket events, omitting base64 audio data"""
@@ -104,7 +107,7 @@ class WebSocketManager:
             print(
                 f"Python tool detected, initializing Jupyter kernel in ./notebooks/{self.session_id}"
             )  # Debug print
-            from jupyter_backend import JupyterKernel
+            from app.core.jupyter import JupyterKernel
 
             work_dir = f"./notebooks/{self.session_id}"
             self.jupyter_kernel = JupyterKernel(work_dir)
@@ -115,7 +118,7 @@ class WebSocketManager:
             "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
         )
         headers = {
-            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+            "Authorization": f"Bearer {self.api_key}",
             "OpenAI-Beta": "realtime=v1",
         }
 

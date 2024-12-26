@@ -1,5 +1,5 @@
-from models.base import Session
-from models.assistant import Assistant
+from app.models.base import Session
+from app.models.assistant import Assistant
 
 
 class AssistantService:

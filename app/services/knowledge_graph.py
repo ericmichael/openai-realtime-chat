@@ -1,5 +1,5 @@
-from models.base import Session
-from models.node import Node, Edge
+from app.models.base import Session
+from app.models.node import Node, Edge
 from typing import List, Dict, Any, Tuple, Set
 from sqlalchemy import and_
 
