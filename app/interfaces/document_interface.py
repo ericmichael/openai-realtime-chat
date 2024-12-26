@@ -5,83 +5,80 @@ document_service = DocumentService()
 
 
 def create_document_interface():
-    with gr.Tab("Manage Documents"):
-        gr.Markdown("Create and manage documents")
+    gr.Markdown("Create and manage documents")
 
-        with gr.Row():
-            with gr.Column(scale=1):
-                document_list = gr.Dropdown(
-                    choices=["None"],
-                    label="Select Document",
-                    value="None",
-                )
+    with gr.Row():
+        with gr.Column(scale=1):
+            document_list = gr.Dropdown(
+                choices=["None"],
+                label="Select Document",
+                value="None",
+            )
 
-                new_document_btn = gr.Button("Create New Document", variant="primary")
-                delete_document_btn = gr.Button(
-                    "Delete Selected Document", variant="stop"
-                )
+            new_document_btn = gr.Button("Create New Document", variant="primary")
+            delete_document_btn = gr.Button("Delete Selected Document", variant="stop")
 
-            with gr.Column(scale=2):
-                document_title = gr.Textbox(
-                    label="Document Title",
-                    placeholder="Enter document title...",
-                    interactive=True,
-                )
-                document_content = gr.TextArea(
-                    label="Content",
-                    placeholder="Enter the document content...",
-                    lines=10,
-                    interactive=True,
-                )
-                document_published = gr.Checkbox(
-                    label="Published",
-                    value=False,
-                    interactive=True,
-                )
-                save_document_btn = gr.Button("Save Changes", variant="primary")
+        with gr.Column(scale=2):
+            document_title = gr.Textbox(
+                label="Document Title",
+                placeholder="Enter document title...",
+                interactive=True,
+            )
+            document_content = gr.TextArea(
+                label="Content",
+                placeholder="Enter the document content...",
+                lines=10,
+                interactive=True,
+            )
+            document_published = gr.Checkbox(
+                label="Published",
+                value=False,
+                interactive=True,
+            )
+            save_document_btn = gr.Button("Save Changes", variant="primary")
 
-        # Wire up the event handlers
-        document_list.change(
-            load_document,
-            inputs=[document_list],
-            outputs=[document_title, document_content, document_published],
-        )
+    # Wire up the event handlers
+    document_list.change(
+        load_document,
+        inputs=[document_list],
+        outputs=[document_title, document_content, document_published],
+    )
 
-        new_document_btn.click(
-            create_new_document,
-            outputs=[
-                document_title,
-                document_content,
-                document_published,
-                document_list,
-            ],
-        )
+    new_document_btn.click(
+        create_new_document,
+        outputs=[
+            document_title,
+            document_content,
+            document_published,
+            document_list,
+        ],
+    )
 
-        save_document_btn.click(
-            save_document,
-            inputs=[
-                document_title,
-                document_content,
-                document_published,
-                document_list,
-            ],
-            outputs=[gr.Textbox(visible=False), document_list],
-        )
+    save_document_btn.click(
+        save_document,
+        inputs=[
+            document_title,
+            document_content,
+            document_published,
+            document_list,
+        ],
+        outputs=[gr.Textbox(visible=False), document_list],
+    )
 
-        delete_document_btn.click(
-            delete_document,
-            inputs=[document_list],
-            outputs=[
-                document_title,
-                document_content,
-                document_published,
-                gr.Textbox(visible=False),
-                document_list,
-            ],
-        )
+    delete_document_btn.click(
+        delete_document,
+        inputs=[document_list],
+        outputs=[
+            document_title,
+            document_content,
+            document_published,
+            gr.Textbox(visible=False),
+            document_list,
+        ],
+    )
 
-        # Initialize document list
-        document_list.choices = load_document_list()
+    # Initialize document list
+    document_list.choices = load_document_list()
 
 
 def load_document_list():

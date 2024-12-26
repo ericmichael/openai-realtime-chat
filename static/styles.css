@@ -1,12 +1,35 @@
 #status,
 #kernel-status {
-    background: transparent;
     margin: 0;
-    padding: 0.5rem;
+    padding: 0;
 }
 
-.status-container {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+#status .container,
+#kernel-status .container {
+    margin: 0.1rem 0 0 0;
+    padding: 0;
+}
+
+/* Target the specific status indicators */
+#status .textspan,
+#kernel-status .textspan {
+    padding: 0.5rem 0.75rem;
+    background: var(--block-background-fill) !important;
+    border: 1px solid var(--block-border-color) !important;
+    width: 100%;
+}
+
+#status .text,
+#kernel-status .text {
+    font-weight: 500;
+    margin-right: 0.5rem;
+    color: var(--body-text-color) !important;
+}
+
+#status .label,
+#kernel-status .label {
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
 }

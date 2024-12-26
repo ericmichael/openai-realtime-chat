@@ -5,6 +5,12 @@ import json
 from inspect import Parameter
 from typing import Any, Callable, List, Dict
 import asyncio
+import importlib
+import pkgutil
+import app.tools as tools_package
+import sys
+import os
+from pathlib import Path
 
 
 # Add the new tool management classes/functions
@@ -98,13 +104,36 @@ class ToolManager:
 
     def get_available_tools(self) -> List[Callable]:
         """Return list of all tool functions marked with @tool decorator"""
-        # Get all module-level attributes
-        module = inspect.getmodule(self)
-        tools = [
-            obj
-            for name, obj in inspect.getmembers(module)
-            if inspect.isfunction(obj) and hasattr(obj, "_is_tool")
-        ]
+        tools = []
+
+        # Get the tools directory path
+        tools_dir = Path(__file__).parent.parent / "tools"
+
+        # Import all Python files in the tools directory
+        for file in tools_dir.glob("*.py"):
+            if file.name != "__init__.py":
+                module_name = f"app.tools.{file.stem}"
+                if module_name not in sys.modules:
+                    try:
+                        importlib.import_module(module_name)
+                    except ImportError as e:
+                        print(f"Error importing {module_name}: {e}")
+
+        # Look through all loaded modules in the tools package
+        for module_name, module in sys.modules.items():
+            if module_name.startswith("app.tools.") and not module_name.endswith(
+                "__init__"
+            ):
+                if module:  # Check if module is not None
+                    # Get all functions marked with @tool decorator
+                    tools.extend(
+                        [
+                            obj
+                            for _, obj in inspect.getmembers(module)
+                            if inspect.isfunction(obj) and hasattr(obj, "_is_tool")
+                        ]
+                    )
+
         print("Found tools:", [tool.__name__ for tool in tools])
         return tools
 
