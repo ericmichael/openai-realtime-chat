@@ -1,3 +1,4 @@
-from .custom_theme import CustomTheme
+from .cyber_punk_theme import CyberPunkTheme
+from .tokyo_night_theme import TokyoNightTheme
 
-__all__ = ["CustomTheme"]
+__all__ = ["CyberPunkTheme", "TokyoNightTheme"]

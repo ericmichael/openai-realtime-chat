@@ -2,7 +2,7 @@ from gradio.themes.base import Base
 from gradio.themes.utils import colors, fonts, sizes
 
 
-class CustomTheme(Base):
+class CyberPunkTheme(Base):
     def __init__(
         self,
         *,

@@ -24,7 +24,7 @@ from app.interfaces import (
 
 # Utility imports
 from app.utils.static import load_static_file
-from app.themes import CustomTheme
+from app.themes import TokyoNightTheme, CyberPunkTheme
 
 ws_manager = WebSocketManager()
 assistant_manager = AssistantManager()
@@ -33,7 +33,7 @@ knowledge_graph_service = KnowledgeGraphService()
 
 
 with gr.Blocks(
-    theme=CustomTheme(),
+    theme=CyberPunkTheme(),
     head=f"""
     <script>{load_static_file('shortcuts.js')}</script>
     <style>{load_static_file('styles.css')}</style>
