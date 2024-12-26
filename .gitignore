@@ -6,3 +6,4 @@ venv
 video.mp4
 *.pyc
 /executable_test
+scripts/seed_personal_graph.py
