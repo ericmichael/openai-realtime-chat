@@ -1,11 +1,6 @@
-import os
-import io
 import json
 import base64
 import websockets
-import numpy as np
-import librosa
-import soundfile as sf
 from datetime import datetime
 from app.core.tools import ToolManager
 from app.utils.magic_variables import magic_manager
@@ -168,25 +163,34 @@ class WebSocketManager:
             self.last_assistant_message_id = None
             print("Disconnected from server.")
 
-    async def send_and_receive(self, audio_event):
+    async def send_and_receive(self, event):
+        """Send an event and handle the response stream"""
         if not self.is_connected or not self.websocket:
             raise Exception("WebSocket not connected")
 
         audio_data_list = []
 
+        # Add previous message ID if it exists
+        if isinstance(event, str):
+            event_dict = json.loads(event)
+        else:
+            event_dict = event
+
         if self.last_assistant_message_id:
-            event_dict = json.loads(audio_event)
             event_dict["previous_item_id"] = self.last_assistant_message_id
-            audio_event = json.dumps(event_dict)
+            event = json.dumps(event_dict)
 
-        self._log_event("SENDING", audio_event)
-        await self.websocket.send(audio_event)
+        self._log_event("SENDING", event)
+        await self.websocket.send(
+            event if isinstance(event, str) else json.dumps(event)
+        )
 
-        # Wait for the message to be created and send response.create
+        # Wait for the message to be created and store the message ID
         async for message in self.websocket:
             self._log_event("RECEIVED", message)
             event = json.loads(message)
             if event.get("type") == "conversation.item.created":
+                self.last_message_id = event.get("item", {}).get("id")
                 create_response = {"type": "response.create"}
                 self._log_event("SENDING", create_response)
                 await self.websocket.send(json.dumps(create_response))
@@ -199,10 +203,12 @@ class WebSocketManager:
 
             # Handle audio responses
             if event.get("type") == "response.audio.delta":
-                audio_data_list.append(event["delta"])
+                audio_data_list.append(base64.b64decode(event["delta"]))
 
-            # Process function calls when response is complete
+            # Store the assistant's message ID when the response is complete
             elif event.get("type") == "response.done":
+                self.last_assistant_message_id = event.get("item_id")
+
                 # Process function calls in the output
                 for output_item in event["response"]["output"]:
                     if output_item["type"] == "function_call":
@@ -247,8 +253,9 @@ class WebSocketManager:
                         await self.websocket.send(json.dumps(create_response))
 
             elif event.get("type") == "response.audio.done":
-                full_audio_base64 = "".join(audio_data_list)
-                return base64.b64decode(full_audio_base64)
+                # Concatenate all audio chunks
+                full_audio = b"".join(audio_data_list)
+                return full_audio
 
     def get_logs(self):
         """Return all logged events as a single string"""

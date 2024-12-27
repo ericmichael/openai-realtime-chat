@@ -33,3 +33,17 @@
     font-weight: 600;
     text-transform: uppercase;
 }
+
+.user.message {
+    border-color: var(--primary-400) !important;
+    background-color: var(--neutral-900) !important;
+    color: var(--neutral-200) !important;
+    border-left: 4px solid var(--primary-400) !important;
+}
+
+.bot.message {
+    border-color: var(--secondary-400) !important;
+    background-color: var(--neutral-800) !important;
+    color: var(--neutral-200) !important;
+    border-left: 4px solid var(--secondary-400) !important;
+}

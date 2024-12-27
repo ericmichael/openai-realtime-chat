@@ -10,6 +10,7 @@ from app.core.websocket import WebSocketManager
 from app.core.assistant_manager import AssistantManager, DEFAULT_INSTRUCTIONS
 from app.interfaces.debug_interface import create_debug_interface
 from app.interfaces.tool_history_interface import create_tool_history_interface
+import time
 
 
 def create_toggle_button():
@@ -66,17 +67,84 @@ def create_voice_chat_interface(
         assistant_manager.get_assistant("General Assistant")["tools"]
     )
 
-    # Audio interaction section
-    with gr.Group(visible=False) as audio_group:
-        audio_input = gr.Audio(
-            label="Record your voice (hold spacebar or click record)",
-            sources="microphone",
-            type="numpy",
-            render=True,
-            interactive=False,
-        )
-        audio_output = gr.Audio(autoplay=True, render=True)
+    # Replace the separate output and input groups with a single container
+    with gr.Column(visible=False, elem_id="chat-container") as chat_container:
+        # Output group
+        with gr.Group():
+            audio_input = gr.Audio(
+                sources="microphone",
+                type="numpy",
+                render=True,
+                interactive=False,
+                show_label=False,
+            )
+            chatbot = gr.Chatbot(type="messages", height=400, show_label=False)
+            audio_output = gr.Audio(
+                autoplay=True, render=True, show_label=False, visible=False
+            )
+            msg_box = gr.MultimodalTextbox(
+                placeholder="Type a message, upload files, or use voice input...",
+                container=False,
+                show_label=False,
+                file_count="multiple",
+                interactive=True,
+            )
+
+        with gr.Accordion("Session Debug", open=False):
+            create_debug_interface(ws_manager)
+
+        with gr.Accordion("Tool History", open=False):
+            create_tool_history_interface(ws_manager)
+
+        clear_btn = gr.Button("Clear Chat")
+
         history_state = gr.State([])
+
+    async def handle_text_message(message, history):
+        """Handle text messages sent through the chat"""
+        if not ws_manager.is_connected:
+            return "", history
+        # Handle text if present
+        if message["text"]:
+            text_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": message["text"]}],
+                },
+            }
+            history.append({"role": "user", "content": message["text"]})
+            await ws_manager.send_and_receive(json.dumps(text_event))
+
+        return "", history
+
+    async def process_bot_response(history):
+        """Process the assistant's response and update chat history"""
+        async for message in ws_manager.websocket:
+            event = json.loads(message)
+
+            # Handle text deltas
+            if event.get("type") == "response.text.delta":
+                if not history or history[-1]["role"] != "assistant":
+                    history.append({"role": "assistant", "content": ""})
+                history[-1]["content"] += event.get("delta", "")
+                yield history
+
+            # Handle audio transcript
+            elif event.get("type") == "response.audio_transcript.done":
+                if not history or history[-1]["role"] != "assistant":
+                    history.append({"role": "assistant", "content": ""})
+                history[-1]["content"] = event.get("transcript", "")
+                yield history
+
+            # Break when response is complete
+            elif event.get("type") == "response.done":
+                break
+
+    def clear_chat():
+        """Clear the chat history"""
+        return []
 
     async def toggle_session(button_text, instructions_value, voice_value, tools_value):
         if button_text == "Start Session":
@@ -182,13 +250,24 @@ def create_voice_chat_interface(
         return json.dumps(event)
 
     async def voice_chat_response(audio_data, history):
+        """Handle voice input and update chat history"""
         if not ws_manager.is_connected:
-            return "Please start a session first", history, None
+            yield None, history, None
+            return
 
+        # Create audio event
         audio_event = audio_to_item_create_event(audio_data)
+
+        # Add transcription placeholder to history
+        history.append({"role": "user", "content": "🎤 Processing voice input..."})
+        yield None, history, None
+
+        # Send audio and get response
         audio_response = await ws_manager.send_and_receive(audio_event)
 
-        if isinstance(audio_response, bytes):
+        # Update history with transcription if available
+        if isinstance(audio_response, bytes) and len(audio_response) > 0:
+            # Convert audio response to playable format
             audio_io = io.BytesIO(audio_response)
             audio_segment = AudioSegment.from_raw(
                 audio_io, sample_width=2, frame_rate=24000, channels=1
@@ -196,11 +275,30 @@ def create_voice_chat_interface(
 
             with io.BytesIO() as buffered:
                 audio_segment.export(buffered, format="wav")
-                return buffered.getvalue(), history, None
+                buffered_audio = buffered.getvalue()
 
-        return None, history, None
+                # Update history with assistant's audio response
+                history[-1]["content"] = "🎤 Voice message sent"
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": "🔊 Audio response",
+                    }
+                )
+
+                print(
+                    f"Audio response size: {len(buffered_audio)} bytes"
+                )  # Debug print
+                # Yield the audio response once
+                yield buffered_audio, history, None
 
     # Wire up all the event handlers
+    assistant_template.change(
+        fn=update_session_settings,
+        inputs=[assistant_template],
+        outputs=[instructions, voice_state, tools_state],
+    )
+
     session_btn.click(
         fn=toggle_session,
         inputs=[session_btn, instructions, voice_state, tools_state],
@@ -209,31 +307,36 @@ def create_voice_chat_interface(
             instructions,
             voice_state,
             tools_state,
-            status_indicator,  # status_indicator
-            kernel_status,  # kernel_status
+            status_indicator,
+            kernel_status,
             audio_input,
             assistant_template,
-            audio_group,
+            chat_container,
         ],
     )
 
     audio_input.stop_recording(
         fn=voice_chat_response,
-        inputs=[audio_input, history_state],
-        outputs=[audio_output, history_state, audio_input],
+        inputs=[audio_input, chatbot],
+        outputs=[audio_output, chatbot, audio_input],
+        show_progress="minimal",
+    ).then(
+        process_bot_response,
+        chatbot,
+        chatbot,
     )
 
-    assistant_template.change(
-        fn=update_session_settings,
-        inputs=[assistant_template],
-        outputs=[instructions, voice_state, tools_state],
+    msg_box.submit(
+        handle_text_message,
+        [msg_box, chatbot],
+        [msg_box, chatbot],
+        queue=False,
+    ).then(
+        process_bot_response,
+        chatbot,
+        chatbot,
     )
 
-    # Add collapsible sections for Debug and Tool History
-    with gr.Accordion("Session Debug", open=False):
-        create_debug_interface(ws_manager)
-
-    with gr.Accordion("Tool History", open=False):
-        create_tool_history_interface(ws_manager)
+    clear_btn.click(lambda: [], None, chatbot, queue=False)
 
     return assistant_template  # Return this for use in other interfaces
