@@ -93,12 +93,30 @@ def bind_kernel(f: Callable, kernel) -> Callable:
     return wrapped
 
 
+def create_openai_chat_schema(f: Callable) -> Dict[str, Any]:
+    """Create a function schema for OpenAI's chat completion API format"""
+    base_schema = schema(f)
+    return {
+        "type": "function",
+        "function": {
+            "name": base_schema["name"],
+            "description": base_schema["description"],
+            "parameters": base_schema["parameters"],
+        },
+    }
+
+
+def create_websocket_schema(f: Callable) -> Dict[str, Any]:
+    """Create a function schema for WebSocket API format (original format)"""
+    return schema(f)  # Use the original schema function
+
+
 class ToolManager:
     def __init__(self):
         self.tools: List[Dict[str, Any]] = []
+        self.chat_tools: List[Dict[str, Any]] = []  # New list for chat interface tools
         self.available_functions: Dict[str, Callable] = {}
         self.tool_choice = "none"
-        # Add history tracking
         self.tool_history: List[Dict[str, Any]] = []
         self.jupyter_kernel = None
 
@@ -148,7 +166,11 @@ class ToolManager:
             )
             for f in functions
         ]
-        self.tools = [schema(f) for f in bound_functions]
+
+        # Create both WebSocket and Chat API compatible schemas
+        self.tools = [create_websocket_schema(f) for f in bound_functions]
+        self.chat_tools = [create_openai_chat_schema(f) for f in bound_functions]
+
         self.tool_choice = "auto" if self.tools else "none"
         self.available_functions = {f.__name__: f for f in bound_functions}
 

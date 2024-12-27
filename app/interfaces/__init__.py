@@ -8,6 +8,7 @@ from .knowledge_graph_search_interface import create_knowledge_graph_search_inte
 from .tool_history_interface import create_tool_history_interface
 from .vector_embeddings_interface import create_vector_embeddings_interface
 from .voice_chat_interface import create_voice_chat_interface
+from .chat_interface import create_chat_interface
 
 __all__ = [
     "create_assistant_management_interface",
@@ -18,4 +19,5 @@ __all__ = [
     "create_tool_history_interface",
     "create_vector_embeddings_interface",
     "create_voice_chat_interface",
+    "create_chat_interface",
 ]

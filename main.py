@@ -20,6 +20,7 @@ from app.interfaces import (
     create_knowledge_graph_search_interface,
     create_vector_embeddings_interface,
     create_voice_chat_interface,
+    create_chat_interface,
 )
 
 # Utility imports
@@ -50,6 +51,10 @@ with gr.Blocks(
 
     # Main Tab Group
     with gr.Tab("💬 Main"):
+        # Regular Chat Tab
+        with gr.Tab("💭 Chat"):
+            create_chat_interface(assistant_manager)
+
         # Voice Chat Tab
         with gr.Tab("🎙️ Voice Chat"):
             assistant_template = create_voice_chat_interface(

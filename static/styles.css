@@ -47,3 +47,21 @@
     color: var(--neutral-200) !important;
     border-left: 4px solid var(--secondary-400) !important;
 }
+
+.bot .message-content .box {
+    border-radius: 4px;
+    cursor: pointer;
+    max-width: max-content;
+    background: var(--neutral-900);
+    border: 1px solid var(--primary-400);
+    font-size: .8em;
+    color: var(--neutral-200);
+    padding: 0.25rem 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.bot .message-content .box:hover {
+    background: var(--neutral-800);
+    border-color: var(--primary-300);
+    box-shadow: 0 0 8px var(--primary-400);
+}
